@@ -2,26 +2,29 @@
 /**
  * Deploy-time database migrator (node-postgres, `pg`).
  *
- * Runs during `npm run build` — on every Vercel deploy — applying pending files
- * in ../migrations to DATABASE_URL. Each file is applied in one transaction and
- * recorded in a `_migrations` table, so it runs once and is safe to re-run.
+ * Runs during `npm run build` and `npm run db:migrate`, applying pending files
+ * in ../migrations to Postgres (`DATABASE_URL`, or local `DB_*` from `.env`).
+ * Each file is applied in one transaction and recorded in `_migrations`, so it
+ * runs once and is safe to re-run. When `DB_NAME` is set and that database does
+ * not exist yet, it is created on the server first.
  *
  * The read is non-recursive, so the opt-in auth schema under migrations/auth/
  * is not applied to an app that never asked for sign-in.
  *
- * No DATABASE_URL (local / preview builds) -> skip; the PGLite fallback applies
- * the same files at startup instead (see src/lib/db.ts).
+ * No Postgres config (local / preview builds) -> skip; the PGLite fallback
+ * applies the same files at startup instead (see src/lib/db.ts).
  */
 import { readdir, readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import pg from "pg";
 import { pendingMigrations } from "./migration-plan.mjs";
+import { quoteIdent, resolvePgConfig } from "./pg-config.mjs";
 
-const databaseUrl = process.env.DATABASE_URL;
-if (!databaseUrl) {
+const pgConfig = resolvePgConfig();
+if (!pgConfig) {
   console.log(
-    "[migrate] DATABASE_URL not set — skipping (the PGLite fallback migrates itself).",
+    "[migrate] no Postgres config — set DATABASE_URL or DB_HOST/DB_NAME (the PGLite fallback migrates itself).",
   );
   process.exit(0);
 }
@@ -42,7 +45,8 @@ async function main() {
     return;
   }
 
-  const pool = new pg.Pool({ connectionString: databaseUrl, max: 1 });
+  await ensureDatabase(pgConfig);
+  const pool = new pg.Pool({ ...pgConfig, max: 1 });
   const client = await pool.connect();
   try {
     await client.query(
@@ -77,6 +81,26 @@ async function main() {
   } finally {
     client.release();
     await pool.end();
+  }
+}
+
+/**
+ * Local Docker often has the server up before the app database exists.
+ * A URL (`DATABASE_URL`) is assumed to already point at the right database.
+ * @param {import("pg").PoolConfig} config
+ */
+async function ensureDatabase(config) {
+  if (config.connectionString || !config.database || config.database === "postgres") return;
+  const name = String(config.database);
+  const admin = new pg.Client({ ...config, database: "postgres" });
+  await admin.connect();
+  try {
+    const existing = await admin.query("SELECT 1 FROM pg_database WHERE datname = $1", [name]);
+    if (existing.rowCount) return;
+    await admin.query(`CREATE DATABASE ${quoteIdent(name)}`);
+    console.log(`[migrate] created database ${name}`);
+  } finally {
+    await admin.end();
   }
 }
 
