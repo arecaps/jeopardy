@@ -1,0 +1,1 @@
+var e=[100,200,300,400,500];function t(e){let t=Math.abs(Math.trunc(e)).toLocaleString(`en-US`);return e<0?`−$${t}`:`$${t}`}function n(e,t){return`${e}:${t}`}function r(e,t){return e?.trim()||`Player ${t+1}`}export{r as i,n,t as r,e as t};

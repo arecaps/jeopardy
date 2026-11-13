@@ -1,0 +1,36 @@
+{
+  "url": "http://127.0.0.1:8080/",
+  "viewports": {
+    "desktop": {
+      "width": 1280,
+      "height": 800,
+      "status": 200,
+      "title": "Answer First",
+      "hasCanvas": false,
+      "bodyTextLen": 783,
+      "bodyTextHash": "e36eb7419acfd34b09c71d36d2f43bb2e12575f7e46910d76eddcd3c1b306fe3",
+      "bodyTextPrefix": "Answer First Boards Library HOST BOARD Answer first. Question se",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview.png"
+    },
+    "mobile": {
+      "width": 390,
+      "height": 844,
+      "status": 200,
+      "title": "Answer First",
+      "hasCanvas": false,
+      "bodyTextLen": 783,
+      "bodyTextHash": "e36eb7419acfd34b09c71d36d2f43bb2e12575f7e46910d76eddcd3c1b306fe3",
+      "bodyTextPrefix": "Answer First Boards Library HOST BOARD Answer first. Question se",
+      "horizontalOverflow": false,
+      "consoleErrors": [],
+      "pageErrors": [],
+      "screenshot": "/workspace/screenshots/app-builder-preview-mobile.png"
+    }
+  },
+  "brandWarnings": [],
+  "authWarnings": [],
+  "verdictFile": "/workspace/screenshots/app-builder-preview.json"
+}
