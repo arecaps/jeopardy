@@ -1,1 +1,0 @@
-import{n as e}from"./studio-Cmr_3FVI.js";var t=e;export{t as errorComponent};
