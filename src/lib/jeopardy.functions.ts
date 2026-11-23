@@ -9,6 +9,7 @@ import {
   type FinalPrompt,
   type GameSummary,
   type LibraryCategory,
+  type TeamNames,
 } from "@/lib/jeopardy";
 
 function read<T>(schema: z.ZodType<T>, input: unknown, fallback: string): T {
@@ -24,6 +25,29 @@ const clueValueSchema = z.union([
   z.literal(400),
   z.literal(500),
 ]);
+
+export const getTeamNames = createServerFn({ method: "GET" }).handler(async (): Promise<TeamNames> => {
+  const sql = await getSql();
+  const rows = await sql<{ slot: number; name: string }>`select slot, name from team_names order by slot`;
+  return [rows[0]?.name ?? "Team 1", rows[1]?.name ?? "Team 2"];
+});
+
+export const saveTeamNames = createServerFn({ method: "POST" })
+  .validator((input: unknown) =>
+    read(
+      z.object({ names: z.tuple([z.string().trim().min(1).max(40), z.string().trim().min(1).max(40)]) }),
+      input,
+      "Give both teams a name, 40 characters or fewer.",
+    ),
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    await sql`
+      insert into team_names (slot, name) values (0, ${data.names[0]}), (1, ${data.names[1]})
+      on conflict (slot) do update set name = excluded.name
+    `;
+    return { names: data.names };
+  });
 
 export const listGames = createServerFn({ method: "GET" }).handler(async (): Promise<GameSummary[]> => {
   const sql = await getSql();
@@ -328,11 +352,11 @@ export const createGame = createServerFn({ method: "POST" })
         where length(trim(cl.answer)) > 0 and length(trim(cl.question)) > 0
         returning game_id
       ),
-      players as (
-        insert into contestants (game_id, slot, score)
+      teams_inserted as (
+        insert into teams (game_id, slot, score)
         select d.game_id, s.slot, 0
         from (select distinct game_id from ins) d
-        cross join (values (0), (1), (2)) as s(slot)
+        cross join (values (0), (1)) as s(slot)
         returning game_id
       ),
       counted as (
@@ -341,7 +365,7 @@ export const createGame = createServerFn({ method: "POST" })
       select g.id as id, coalesce(counted.n, 0)::int as n
       from g
       left join counted on counted.game_id = g.id
-      where (select count(*) from players) >= 0
+      where (select count(*) from teams_inserted) >= 0
     `;
     const id = Number(created[0]?.id ?? 0);
     const n = Number(created[0]?.n ?? 0);
@@ -396,8 +420,10 @@ export const getBoard = createServerFn({ method: "GET" })
     const playedRows = await sql<{ position: number; value: number }>`
       select position, value from played_clues where game_id = ${data.gameId}
     `;
-    const contestants = await sql<{ id: number; slot: number; score: number }>`
-      select id, slot, score from contestants where game_id = ${data.gameId} order by slot
+    const teams = await sql<{ id: number; slot: number; name: string; score: number }>`
+      select t.id, t.slot, n.name, t.score
+      from teams t join team_names n on n.slot = t.slot
+      where t.game_id = ${data.gameId} order by t.slot
     `;
     const categories: { position: number; name: string }[] = [];
     for (const clue of clues) {
@@ -407,7 +433,7 @@ export const getBoard = createServerFn({ method: "GET" })
       }
     }
     categories.sort((left, right) => left.position - right.position);
-    if (categories.length !== 6 || contestants.length !== 3) {
+    if (categories.length !== 6 || teams.length !== 2) {
       throw new Error("This board is incomplete.");
     }
     return {
@@ -424,9 +450,10 @@ export const getBoard = createServerFn({ method: "GET" })
         position: Number(row.position),
         value: Number(row.value),
       })),
-      contestants: contestants.map((row) => ({
+      teams: teams.map((row) => ({
         id: row.id,
         slot: Number(row.slot),
+        name: row.name,
         score: Number(row.score),
       })),
       final: {
@@ -462,6 +489,26 @@ export const markPlayed = createServerFn({ method: "POST" })
     return { ok: true as const };
   });
 
+export const resetBoard = createServerFn({ method: "POST" })
+  .validator((input: unknown) =>
+    read(z.object({ gameId: z.number().int().positive() }), input, "Board not found."),
+  )
+  .handler(async ({ data }) => {
+    const sql = await getSql();
+    const rows = await sql<{ id: number }>`
+      with reset as (
+        update games set final_played = false
+        where id = ${data.gameId}
+        returning id
+      ), cleared as (
+        delete from played_clues where game_id in (select id from reset)
+      )
+      select id from reset
+    `;
+    if (!rows[0]) throw new Error("That board is gone.");
+    return { ok: true as const };
+  });
+
 export const setFinalPlayed = createServerFn({ method: "POST" })
   .validator((input: unknown) =>
     read(
@@ -486,7 +533,7 @@ export const setScore = createServerFn({ method: "POST" })
     read(
       z.object({
         gameId: z.number().int().positive(),
-        contestantId: z.number().int().positive(),
+        teamId: z.number().int().positive(),
         score: z.number().int().min(-1_000_000).max(1_000_000),
       }),
       input,
@@ -496,12 +543,12 @@ export const setScore = createServerFn({ method: "POST" })
   .handler(async ({ data }) => {
     const sql = await getSql();
     const rows = await sql<{ id: number; slot: number; score: number }>`
-      update contestants
+      update teams
       set score = ${data.score}
-      where id = ${data.contestantId} and game_id = ${data.gameId}
+      where id = ${data.teamId} and game_id = ${data.gameId}
       returning id, slot, score
     `;
     const row = rows[0];
-    if (!row) throw new Error("That player is not on this board.");
+    if (!row) throw new Error("That team is not on this board.");
     return { id: row.id, slot: Number(row.slot), score: Number(row.score) };
   });

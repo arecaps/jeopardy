@@ -1,52 +1,20 @@
 import { Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
-import { markPlayed, setFinalPlayed, setScore } from "@/lib/jeopardy.functions";
+import { markPlayed, resetBoard, setFinalPlayed, setScore } from "@/lib/jeopardy.functions";
+import { Button } from "@/components/ui";
 import {
   CLUE_VALUES,
   clueKey,
   formatDollars,
-  playerLabel,
+  teamLabel,
   type BoardData,
   type ClueValue,
-  type ContestantScore,
+  type TeamScore,
 } from "@/lib/jeopardy";
 import { cn } from "@/lib/cn";
 
-const DEFAULT_NAMES = ["Player 1", "Player 2", "Player 3"];
-
-function useNames(gameId: number) {
-  const [names, setNames] = useState(DEFAULT_NAMES);
-  useEffect(() => {
-    try {
-      const raw = localStorage.getItem(`answer-first-names:${gameId}`);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as unknown;
-      if (!Array.isArray(parsed) || parsed.length !== 3) return;
-      setNames(
-        parsed.map((name, index) =>
-          typeof name === "string" ? name.slice(0, 40) : DEFAULT_NAMES[index] ?? "Player",
-        ),
-      );
-    } catch {
-      /* keep the defaults if storage is unreadable */
-    }
-  }, [gameId]);
-
-  function setName(slot: number, name: string) {
-    setNames((prev) => {
-      const next = [...prev];
-      next[slot] = name.slice(0, 40);
-      localStorage.setItem(`answer-first-names:${gameId}`, JSON.stringify(next));
-      return next;
-    });
-  }
-
-  return { names, setName };
-}
-
 export function PlayScreen({ board }: { board: BoardData }) {
-  const { names, setName } = useNames(board.id);
-  const [contestants, setContestants] = useState(board.contestants);
+  const [teams, setTeams] = useState(board.teams);
   const [played, setPlayed] = useState(
     () => new Set(board.played.map((item) => clueKey(item.position, item.value))),
   );
@@ -56,9 +24,10 @@ export function PlayScreen({ board }: { board: BoardData }) {
   const [finalSession, setFinalSession] = useState(0);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [resetting, setResetting] = useState(false);
   const lock = useRef(false);
-  const contestantsRef = useRef(contestants);
-  contestantsRef.current = contestants;
+  const teamsRef = useRef(teams);
+  teamsRef.current = teams;
   const modal = clue !== null || finalStep !== null;
 
   useEffect(() => {
@@ -78,7 +47,7 @@ export function PlayScreen({ board }: { board: BoardData }) {
     };
   }, [modal]);
 
-  async function commitScore(contestantId: number, score: number) {
+  async function commitScore(teamId: number, score: number) {
     if (lock.current) throw new Error("Wait for the last score to save.");
     lock.current = true;
     setBusy(true);
@@ -86,13 +55,13 @@ export function PlayScreen({ board }: { board: BoardData }) {
     const nextScore = Math.max(-1_000_000, Math.min(1_000_000, score));
     try {
       const saved = await setScore({
-        data: { gameId: board.id, contestantId, score: nextScore },
+        data: { gameId: board.id, teamId, score: nextScore },
       });
-      setContestants((prev) => {
-        const next = prev.map((contestant) =>
-          contestant.id === saved.id ? { ...contestant, score: saved.score } : contestant,
+      setTeams((prev) => {
+        const next = prev.map((team) =>
+          team.id === saved.id ? { ...team, score: saved.score } : team,
         );
-        contestantsRef.current = next;
+        teamsRef.current = next;
         return next;
       });
     } catch (err) {
@@ -104,10 +73,32 @@ export function PlayScreen({ board }: { board: BoardData }) {
     }
   }
 
-  async function bump(contestantId: number, delta: number) {
-    const current = contestantsRef.current.find((contestant) => contestant.id === contestantId);
+  async function bump(teamId: number, delta: number) {
+    const current = teamsRef.current.find((team) => team.id === teamId);
     if (!current) return;
-    await commitScore(contestantId, current.score + delta);
+    await commitScore(teamId, current.score + delta);
+  }
+
+  async function reset() {
+    if (lock.current) return;
+    lock.current = true;
+    setBusy(true);
+    setResetting(true);
+    setError("");
+    try {
+      await resetBoard({ data: { gameId: board.id } });
+      setPlayed(new Set());
+      setFinalPlayedState(false);
+      setClue(null);
+      setFinalStep(null);
+      setFinalSession((session) => session + 1);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not reset the board.");
+    } finally {
+      lock.current = false;
+      setBusy(false);
+      setResetting(false);
+    }
   }
 
   const openClue = clue
@@ -120,18 +111,28 @@ export function PlayScreen({ board }: { board: BoardData }) {
   return (
     <div className="h-dvh overflow-hidden bg-bg text-fg">
       <div className="flex h-full flex-col" inert={modal ? true : undefined}>
-        <header className="flex shrink-0 items-center gap-2 px-2 py-1 sm:px-3">
+        <header className="flex shrink-0 flex-wrap items-center gap-2 px-2 py-1 sm:px-3">
           <Link
             to="/"
             className="inline-flex min-h-11 shrink-0 items-center rounded-md px-2 text-sm text-muted"
           >
             Boards
           </Link>
-          <h1 className="min-w-0 flex-1 truncate text-center font-display text-lg font-medium sm:text-2xl">
+          <h1 className="order-first w-full min-w-0 truncate text-center font-display text-lg font-medium sm:order-none sm:w-auto sm:flex-1 sm:text-2xl">
             {board.title}
           </h1>
+          <Button
+            variant="quiet"
+            className="ml-auto shrink-0 px-3"
+            disabled={busy || (played.size === 0 && !finalPlayed)}
+            title="Restore all questions and the final round. Team names and scores stay the same."
+            onClick={() => void reset()}
+          >
+            {resetting ? "Resetting…" : "Reset board"}
+          </Button>
           <button
             type="button"
+            disabled={resetting}
             onClick={() => setFinalStep(finalPlayed ? "question" : "category")}
             className="inline-flex min-h-11 shrink-0 items-center rounded-md bg-fg px-3 text-sm font-medium text-bg"
           >
@@ -157,7 +158,7 @@ export function PlayScreen({ board }: { board: BoardData }) {
                 <button
                   key={clueKey(category.position, value)}
                   type="button"
-                  disabled={used}
+                  disabled={used || resetting}
                   onClick={() => setClue({ position: category.position, value })}
                   aria-label={
                     used
@@ -177,16 +178,14 @@ export function PlayScreen({ board }: { board: BoardData }) {
             }),
           )}
         </div>
-        <footer className="score-dock grid shrink-0 grid-cols-3 gap-2 border-t border-line px-2 pt-2">
-          {contestants.map((contestant) => (
-            <PlayerDock
-              key={contestant.id}
-              contestant={contestant}
-              name={names[contestant.slot] ?? ""}
+        <footer className="score-dock grid shrink-0 grid-cols-2 gap-2 border-t border-line px-2 pt-2">
+          {teams.map((team) => (
+            <TeamDock
+              key={team.id}
+              team={team}
               busy={busy}
-              onName={(name) => setName(contestant.slot, name)}
-              onBump={(delta) => void bump(contestant.id, delta).catch(() => undefined)}
-              onCommit={(score) => void commitScore(contestant.id, score).catch(() => undefined)}
+              onBump={(delta) => void bump(team.id, delta).catch(() => undefined)}
+              onCommit={(score) => void commitScore(team.id, score).catch(() => undefined)}
             />
           ))}
         </footer>
@@ -198,8 +197,7 @@ export function PlayScreen({ board }: { board: BoardData }) {
           value={openClue.value}
           answer={openClue.answer}
           question={openClue.question}
-          contestants={contestants}
-          names={names}
+          teams={teams}
           busy={busy}
           onAdjust={bump}
           onCancel={() => setClue(null)}
@@ -219,8 +217,7 @@ export function PlayScreen({ board }: { board: BoardData }) {
           final={board.final}
           step={finalStep}
           reviewing={finalPlayed && finalStep === "question"}
-          contestants={contestants}
-          names={names}
+          teams={teams}
           busy={busy}
           onStep={setFinalStep}
           onAdjust={bump}
@@ -242,50 +239,35 @@ export function PlayScreen({ board }: { board: BoardData }) {
   );
 }
 
-function PlayerDock({
-  contestant,
-  name,
+function TeamDock({
+  team,
   busy,
-  onName,
   onBump,
   onCommit,
 }: {
-  contestant: ContestantScore;
-  name: string;
+  team: TeamScore;
   busy: boolean;
-  onName: (name: string) => void;
   onBump: (delta: number) => void;
   onCommit: (score: number) => void;
 }) {
-  const label = playerLabel(name, contestant.slot);
-  const [text, setText] = useState(String(contestant.score));
+  const label = teamLabel(team.name, team.slot);
+  const [text, setText] = useState(String(team.score));
   const [focused, setFocused] = useState(false);
   useEffect(() => {
-    if (!focused) setText(String(contestant.score));
-  }, [contestant.score, focused]);
+    if (!focused) setText(String(team.score));
+  }, [team.score, focused]);
 
   return (
     <div className="min-w-0">
-      <label className="sr-only" htmlFor={`name-${contestant.slot}`}>
-        Name for {label}
-      </label>
-      <input
-        id={`name-${contestant.slot}`}
-        value={name}
-        maxLength={40}
-        autoComplete="off"
-        aria-label={`Name for player ${contestant.slot + 1}`}
-        onChange={(event) => onName(event.target.value)}
-        className="h-11 w-full min-w-0 rounded-md border border-line bg-bg px-2 text-base text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg"
-      />
+      <p className="truncate px-2 py-2 text-base font-medium" title={label}>{label}</p>
       <input
         inputMode="numeric"
         aria-label={`Score for ${label}`}
         disabled={busy}
-        value={focused ? text : String(contestant.score)}
+        value={focused ? text : String(team.score)}
         onFocus={() => {
           setFocused(true);
-          setText(String(contestant.score));
+          setText(String(team.score));
         }}
         onChange={(event) => setText(event.target.value)}
         onBlur={() => {
@@ -294,11 +276,11 @@ function PlayerDock({
           const negative = cleaned.startsWith("-") || cleaned.startsWith("−");
           const digits = cleaned.replace(/[-−]/g, "");
           if (!/^\d+$/.test(digits)) {
-            setText(String(contestant.score));
+            setText(String(team.score));
             return;
           }
           const score = negative ? -Number(digits) : Number(digits);
-          if (score !== contestant.score) onCommit(score);
+          if (score !== team.score) onCommit(score);
         }}
         className="mt-1 h-11 w-full rounded-md border border-line bg-bg text-center text-lg font-semibold tabular-nums text-fg focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-fg"
       />
@@ -331,8 +313,7 @@ function ClueOverlay({
   value,
   answer,
   question,
-  contestants,
-  names,
+  teams,
   busy,
   onAdjust,
   onCancel,
@@ -342,10 +323,9 @@ function ClueOverlay({
   value: number;
   answer: string;
   question: string;
-  contestants: ContestantScore[];
-  names: string[];
+  teams: TeamScore[];
   busy: boolean;
-  onAdjust: (contestantId: number, delta: number) => Promise<void>;
+  onAdjust: (teamId: number, delta: number) => Promise<void>;
   onCancel: () => void;
   onDone: () => Promise<void>;
 }) {
@@ -354,11 +334,11 @@ function ClueOverlay({
   const [localError, setLocalError] = useState("");
   const [closing, setClosing] = useState(false);
 
-  async function award(contestantId: number, delta: number) {
+  async function award(teamId: number, delta: number) {
     setLocalError("");
     try {
-      await onAdjust(contestantId, delta);
-      setApplied((prev) => ({ ...prev, [contestantId]: (prev[contestantId] ?? 0) + delta }));
+      await onAdjust(teamId, delta);
+      setApplied((prev) => ({ ...prev, [teamId]: (prev[teamId] ?? 0) + delta }));
     } catch {
       setLocalError("Score did not save.");
     }
@@ -419,19 +399,19 @@ function ClueOverlay({
         )}
         {localError ? <p className="mt-4 text-sm">{localError}</p> : null}
       </div>
-      <div className="score-dock grid grid-cols-3 gap-2 border-t border-line px-2 pt-2">
-        {contestants.map((contestant) => {
-          const label = playerLabel(names[contestant.slot], contestant.slot);
-          const marked = applied[contestant.id];
+      <div className="score-dock grid grid-cols-2 gap-2 border-t border-line px-2 pt-2">
+        {teams.map((team) => {
+          const label = teamLabel(team.name, team.slot);
+          const marked = applied[team.id];
           return (
-            <div key={contestant.id} className="min-w-0">
+            <div key={team.id} className="min-w-0">
               <p className="truncate text-sm font-medium">{label}</p>
-              <p className="text-lg font-semibold tabular-nums">{formatDollars(contestant.score)}</p>
+              <p className="text-lg font-semibold tabular-nums">{formatDollars(team.score)}</p>
               {marked != null && marked !== 0 ? (
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => void award(contestant.id, -marked)}
+                  onClick={() => void award(team.id, -marked)}
                   className="mt-1 min-h-11 w-full rounded-md border border-line text-sm"
                 >
                   Undo
@@ -441,7 +421,7 @@ function ClueOverlay({
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => void award(contestant.id, value)}
+                    onClick={() => void award(team.id, value)}
                     className="flex min-h-14 flex-col items-center justify-center rounded-md bg-fg text-bg disabled:opacity-40"
                   >
                     <span className="text-xs font-medium">Right</span>
@@ -450,7 +430,7 @@ function ClueOverlay({
                   <button
                     type="button"
                     disabled={busy}
-                    onClick={() => void award(contestant.id, -value)}
+                    onClick={() => void award(team.id, -value)}
                     className="flex min-h-14 flex-col items-center justify-center rounded-md border border-line disabled:opacity-40"
                   >
                     <span className="text-xs font-medium">Wrong</span>
@@ -470,8 +450,7 @@ function FinalOverlay({
   final,
   step,
   reviewing,
-  contestants,
-  names,
+  teams,
   busy,
   onStep,
   onAdjust,
@@ -482,16 +461,15 @@ function FinalOverlay({
   final: BoardData["final"];
   step: "category" | "answer" | "question";
   reviewing: boolean;
-  contestants: ContestantScore[];
-  names: string[];
+  teams: TeamScore[];
   busy: boolean;
   onStep: (step: "category" | "answer" | "question") => void;
-  onAdjust: (contestantId: number, delta: number) => Promise<void>;
+  onAdjust: (teamId: number, delta: number) => Promise<void>;
   onClose: () => void;
   onDone: () => Promise<void>;
   onRerun: () => Promise<void>;
 }) {
-  const [wagers, setWagers] = useState(["", "", ""]);
+  const [wagers, setWagers] = useState(["", ""]);
   const [applied, setApplied] = useState<Record<number, number>>({});
   const [localError, setLocalError] = useState("");
   const [closing, setClosing] = useState(false);
@@ -502,25 +480,25 @@ function FinalOverlay({
     return Math.min(1_000_000, Math.floor(digits));
   }
 
-  async function award(contestant: ContestantScore, delta: number) {
+  async function award(team: TeamScore, delta: number) {
     setLocalError("");
     try {
-      await onAdjust(contestant.id, delta);
-      setApplied((prev) => ({ ...prev, [contestant.id]: delta }));
+      await onAdjust(team.id, delta);
+      setApplied((prev) => ({ ...prev, [team.id]: delta }));
     } catch {
       setLocalError("Score did not save.");
     }
   }
 
-  async function undo(contestant: ContestantScore) {
-    const marked = applied[contestant.id];
+  async function undo(team: TeamScore) {
+    const marked = applied[team.id];
     if (marked == null) return;
     setLocalError("");
     try {
-      await onAdjust(contestant.id, -marked);
+      await onAdjust(team.id, -marked);
       setApplied((prev) => {
         const next = { ...prev };
-        delete next[contestant.id];
+        delete next[team.id];
         return next;
       });
     } catch {
@@ -576,7 +554,7 @@ function FinalOverlay({
         {step === "answer" ? (
           <>
             <p className="mt-6 max-w-md text-pretty text-sm text-muted">
-              Have players lock a wager before you continue.
+              Have teams lock a wager before you continue.
             </p>
             <button
               type="button"
@@ -608,26 +586,26 @@ function FinalOverlay({
               <p className="pb-2 text-sm text-muted">
                 Enter each wager, then mark it right or wrong. Scoring again adds to the current total.
               </p>
-              <div className="grid grid-cols-3 gap-2">
-                {contestants.map((contestant) => {
-                  const label = playerLabel(names[contestant.slot], contestant.slot);
-                  const marked = applied[contestant.id];
+              <div className="grid grid-cols-2 gap-2">
+                {teams.map((team) => {
+                  const label = teamLabel(team.name, team.slot);
+                  const marked = applied[team.id];
                   return (
-                    <div key={contestant.id} className="min-w-0">
+                    <div key={team.id} className="min-w-0">
                       <p className="truncate text-sm font-medium">{label}</p>
-                      <p className="tabular-nums">{formatDollars(contestant.score)}</p>
-                      <label className="sr-only" htmlFor={`wager-${contestant.slot}`}>
+                      <p className="tabular-nums">{formatDollars(team.score)}</p>
+                      <label className="sr-only" htmlFor={`wager-${team.slot}`}>
                         Wager for {label}
                       </label>
                       <input
-                        id={`wager-${contestant.slot}`}
+                        id={`wager-${team.slot}`}
                         inputMode="numeric"
                         placeholder="Wager"
-                        value={wagers[contestant.slot] ?? ""}
+                        value={wagers[team.slot] ?? ""}
                         onChange={(event) =>
                           setWagers((prev) => {
                             const next = [...prev];
-                            next[contestant.slot] = event.target.value;
+                            next[team.slot] = event.target.value;
                             return next;
                           })
                         }
@@ -637,7 +615,7 @@ function FinalOverlay({
                         <button
                           type="button"
                           disabled={busy}
-                          onClick={() => void undo(contestant)}
+                          onClick={() => void undo(team)}
                           className="mt-1 min-h-11 w-full rounded-md border border-line text-sm"
                         >
                           Undo
@@ -647,7 +625,7 @@ function FinalOverlay({
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => void award(contestant, wagerOf(contestant.slot))}
+                            onClick={() => void award(team, wagerOf(team.slot))}
                             className="min-h-11 rounded-md bg-fg text-sm font-medium text-bg disabled:opacity-40"
                           >
                             Right
@@ -655,7 +633,7 @@ function FinalOverlay({
                           <button
                             type="button"
                             disabled={busy}
-                            onClick={() => void award(contestant, -wagerOf(contestant.slot))}
+                            onClick={() => void award(team, -wagerOf(team.slot))}
                             className="min-h-11 rounded-md border border-line text-sm disabled:opacity-40"
                           >
                             Wrong

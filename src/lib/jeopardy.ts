@@ -14,7 +14,8 @@ export type GameSummary = {
 };
 export type ClueDraft = { value: ClueValue; answer: string; question: string };
 export type CategoryDetail = { id: number; name: string; clues: ClueDraft[] };
-export type ContestantScore = { id: number; slot: number; score: number };
+export type TeamNames = [string, string];
+export type TeamScore = { id: number; slot: number; name: string; score: number };
 export type BoardClue = { position: number; value: number; answer: string; question: string };
 export type BoardData = {
   id: number;
@@ -22,7 +23,7 @@ export type BoardData = {
   categories: { position: number; name: string }[];
   clues: BoardClue[];
   played: { position: number; value: number }[];
-  contestants: ContestantScore[];
+  teams: TeamScore[];
   final: { category: string; answer: string; question: string; played: boolean };
 };
 
@@ -35,7 +36,7 @@ export function clueKey(position: number, value: number): string {
   return `${position}:${value}`;
 }
 
-export function playerLabel(name: string | undefined, slot: number): string {
+export function teamLabel(name: string | undefined, slot: number): string {
   const trimmed = name?.trim();
-  return trimmed ? trimmed : `Player ${slot + 1}`;
+  return trimmed ? trimmed : `Team ${slot + 1}`;
 }

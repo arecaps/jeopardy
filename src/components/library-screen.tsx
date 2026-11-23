@@ -16,10 +16,10 @@ export function LibraryScreen({
   return (
     <div className="grid gap-12 lg:grid-cols-2">
       <section>
-        <h1 className="font-display text-3xl font-medium tracking-tight">Library</h1>
+        <h2 className="font-display text-3xl font-medium tracking-tight">Library</h2>
         <p className="mt-3 text-pretty text-muted">
           Each category holds five clues, from 100 to 500. On the board, a square shows the answer.
-          Players respond with the question.
+          Teams respond with the question.
         </p>
         <CategoryCreator />
         {categories.length === 0 ? (

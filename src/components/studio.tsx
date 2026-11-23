@@ -32,7 +32,7 @@ export function AppHeader() {
             )}
             aria-current={library ? "page" : undefined}
           >
-            Library
+            Settings
           </Link>
         </nav>
       </div>
